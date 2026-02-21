@@ -1,10 +1,11 @@
 /**
  * Certificate Routes
- * POST /api/certificates/issue        — Upload PDF, mint on-chain
- * GET  /api/certificates              — List all (issuer)
- * GET  /api/certificates/:certId      — Single cert details
- * POST /api/certificates/revoke       — Revoke a cert
- * POST /api/certificates/tamper-check — Hash compare
+ * POST /api/certificates/issue/prepare  — Upload PDF to IPFS, return preparation data
+ * POST /api/certificates/issue/confirm  — Save DB record after frontend MetaMask signing
+ * GET  /api/certificates                — List all (issuer)
+ * GET  /api/certificates/:certId        — Single cert details
+ * POST /api/certificates/revoke         — Revoke a cert
+ * POST /api/certificates/tamper-check   — Hash compare
  * GET  /api/certificates/student/:address — Student's cert history
  */
 
@@ -12,12 +13,12 @@ import { Router } from "express";
 import multer from "multer";
 import crypto from "crypto";
 import QRCode from "qrcode";
+import Joi from "joi";
 import { v4 as uuidv4 } from "uuid";
 import { ethers } from "ethers";
 import { protect } from "../middleware/auth.js";
 import Certificate from "../models/Certificate.js";
 import {
-  issueCertificateOnChain,
   revokeCertificateOnChain,
   checkCertificateOnChain,
   getCertificateFromChain,
@@ -26,6 +27,22 @@ import {
 import { fetchIPFSFile, uploadToIPFS } from "../services/ipfs.js";
 
 const router = Router();
+
+// ── Joi validation schema for issuance metadata ─────────
+const issuanceSchema = Joi.object({
+  studentAddress: Joi.string().required(),
+  studentName: Joi.string().trim().min(1).max(200).required()
+    .messages({ "string.empty": "studentName is required" }),
+  courseName: Joi.string().trim().min(1).max(200).required()
+    .messages({ "string.empty": "courseName is required" }),
+  organizationName: Joi.string().trim().min(1).max(200).required()
+    .messages({ "string.empty": "organizationName is required" }),
+  grade: Joi.string().trim().max(50).allow("").optional(),
+  issueDate: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .required()
+    .messages({ "string.pattern.base": "issueDate must be in YYYY-MM-DD format" }),
+}).options({ stripUnknown: true });
 
 function validateStudentAddress(studentAddress) {
   const value = String(studentAddress || "").trim();
@@ -74,15 +91,25 @@ const upload = multer({
   },
 });
 
-// ── ISSUE ────────────────────────────────────────────────
+// ── ISSUE / PREPARE ─────────────────────────────────────
+// Uploads the PDF to IPFS and returns everything the frontend
+// needs to construct the blockchain transaction. NO database
+// record is created here — that only happens in /issue/confirm.
 
-router.post("/issue", protect, upload.single("certificate"), async (req, res) => {
+router.post("/issue/prepare", protect, upload.single("certificate"), async (req, res) => {
   try {
-    const { studentAddress, studentName, courseName, grade, issueDate, organizationName } =
-      req.body;
+    // 0. Validate metadata with Joi
+    const { error: validationError, value: validated } = issuanceSchema.validate(req.body);
+    if (validationError) {
+      return res.status(400).json({
+        error: "Validation failed",
+        details: validationError.details.map((d) => d.message).join("; "),
+      });
+    }
 
     if (!req.file) return res.status(400).json({ error: "No PDF file uploaded" });
-    const studentCheck = validateStudentAddress(studentAddress);
+
+    const studentCheck = validateStudentAddress(validated.studentAddress);
     if (!studentCheck.ok) return res.status(400).json({ error: studentCheck.message });
     const normalizedStudentAddress = studentCheck.address;
 
@@ -109,39 +136,80 @@ router.post("/issue", protect, upload.single("certificate"), async (req, res) =>
     // 4. Generate unique cert ID
     const certId = `YOVAAN-${uuidv4().toUpperCase().slice(0, 8)}`;
 
-    // 5. Metadata JSON (stored on-chain and in DB)
+    // 5. Metadata JSON (will be stored on-chain by frontEnd)
     const metadata = JSON.stringify({
-      studentName,
-      courseName,
-      grade,
-      issueDate,
-      organizationName,
+      studentName: validated.studentName,
+      courseName: validated.courseName,
+      grade: validated.grade,
+      issueDate: validated.issueDate,
+      organizationName: validated.organizationName,
     });
 
-    // 6. Issue on blockchain
-    console.log("⛓️  Writing to blockchain...");
-    const txHash = await issueCertificateOnChain({
-      certId,
-      hash,
-      cid,
-      studentAddress: normalizedStudentAddress,
-      metadata,
-    });
-    console.log("✅ TX Hash:", txHash);
-
-    // 7. Generate QR code pointing to verification portal
+    // 6. Generate QR code pointing to verification portal
     const verifyUrl = `${process.env.VERIFY_BASE_URL || "http://localhost:3000/verify"}?certId=${certId}`;
     const qrCodeData = await QRCode.toDataURL(verifyUrl);
 
-    // 8. Save to MongoDB (fast-read cache)
+    // 7. Return preparation data — frontend will sign & submit to chain
+    res.status(200).json({
+      success: true,
+      certId,
+      hash,
+      cid,
+      metadata,
+      studentAddress: normalizedStudentAddress,
+      contractAddress: process.env.CONTRACT_ADDRESS,
+      ipfsUrl: buildOriginalFileUrl(req, certId),
+      verifyUrl,
+      qrCode: qrCodeData,
+      studentName: validated.studentName,
+      courseName: validated.courseName,
+      grade: validated.grade,
+      issueDate: validated.issueDate,
+      organizationName: validated.organizationName,
+    });
+  } catch (err) {
+    console.error("[Prepare Error]", err);
+    const status = err.status && Number.isInteger(err.status) ? err.status : 500;
+    res.status(status).json({
+      error: err.message || "Certificate preparation failed",
+      code: err.code,
+      details: err.details,
+    });
+  }
+});
+
+// ── ISSUE / CONFIRM ─────────────────────────────────────
+// Called by the frontend AFTER the MetaMask transaction is mined.
+// This is the ONLY place the MongoDB record is created.
+
+router.post("/issue/confirm", protect, async (req, res) => {
+  try {
+    const {
+      certId, txHash, cid, hash,
+      studentAddress, studentName, courseName,
+      grade, issueDate, organizationName,
+      qrCode, verifyUrl,
+    } = req.body;
+
+    if (!certId || !txHash) {
+      return res.status(400).json({ error: "certId and txHash are required" });
+    }
+
+    // Prevent duplicate confirmation
+    const existing = await Certificate.findOne({ certId });
+    if (existing) {
+      return res.status(409).json({ error: "Certificate already confirmed", certId });
+    }
+
+    // Save to MongoDB
     const cert = await Certificate.create({
       certId,
       hash,
       cid,
       issuerAddress: req.body.issuerAddress || "0x0",
-      studentAddress: normalizedStudentAddress.toLowerCase(),
+      studentAddress: (studentAddress || "").toLowerCase(),
       txHash,
-      qrCodeData,
+      qrCodeData: qrCode,
       verifyUrl,
       studentName,
       courseName,
@@ -152,21 +220,16 @@ router.post("/issue", protect, upload.single("certificate"), async (req, res) =>
 
     res.status(201).json({
       success: true,
-      certId,
-      txHash,
-      cid,
-      ipfsUrl: buildOriginalFileUrl(req, certId),
-      verifyUrl,
-      qrCode: qrCodeData,
+      certId: cert.certId,
+      txHash: cert.txHash,
+      cid: cert.cid,
+      ipfsUrl: verifyUrl ? verifyUrl.replace("/verify", "/api/certificates/" + certId + "/original-file") : "",
+      verifyUrl: cert.verifyUrl,
+      qrCode: cert.qrCodeData,
     });
   } catch (err) {
-    console.error("[Issue Error]", err);
-    const status = err.status && Number.isInteger(err.status) ? err.status : 500;
-    res.status(status).json({
-      error: err.message || "Certificate issuance failed",
-      code: err.code,
-      details: err.details,
-    });
+    console.error("[Confirm Error]", err);
+    res.status(500).json({ error: err.message || "Certificate confirmation failed" });
   }
 });
 
@@ -371,12 +434,12 @@ router.post("/tamper-check", upload.single("certificate"), async (req, res) => {
       certId,
       cid: onChain.cid,
       uploadedHash,
-      originalHash:  onChain.hash,
+      originalHash: onChain.hash,
       clientHash: clientHash || null,
       transferIntact,
       originalIpfsHash,
       ipfsByteMatchOnChain,
-      revoked:       onChain.revoked,
+      revoked: onChain.revoked,
       metadata,
       ipfsUrl: buildOriginalFileUrl(req, certId),
       verdict,

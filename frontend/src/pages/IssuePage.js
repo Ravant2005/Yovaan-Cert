@@ -1,14 +1,16 @@
 import React, { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
-import { Wallet, isAddress } from "ethers";
-import { issueCertificate } from "../utils/api";
+import { ethers, isAddress, Wallet } from "ethers";
+import { prepareIssuance, confirmIssuance } from "../utils/api";
+import { CERTIFICATE_REGISTRY_ABI } from "../utils/contractABI";
 import Layout from "../components/Layout";
 
 const TX_EXPLORER_URL = process.env.REACT_APP_TX_EXPLORER_URL || "https://amoy.polygonscan.com/tx";
+const CONTRACT_ADDRESS = process.env.REACT_APP_CONTRACT_ADDRESS;
 
 export default function IssuePage() {
-  const [file, setFile]       = useState(null);
-  const [form, setForm]       = useState({
+  const [file, setFile] = useState(null);
+  const [form, setForm] = useState({
     studentAddress: "",
     studentName: "",
     courseName: "",
@@ -16,10 +18,11 @@ export default function IssuePage() {
     issueDate: new Date().toISOString().split("T")[0],
     organizationName: "",
   });
-  const [result, setResult]   = useState(null);
-  const [error, setError]     = useState("");
-  const [info, setInfo]       = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
 
   const onDrop = useCallback(accepted => {
     if (accepted[0]) setFile(accepted[0]);
@@ -35,6 +38,11 @@ export default function IssuePage() {
   async function handleSubmit(e) {
     e.preventDefault();
     if (!file) return setError("Please upload a PDF file");
+
+    // Check MetaMask availability
+    if (!window.ethereum) {
+      return setError("MetaMask is not installed. Please install MetaMask to issue certificates.");
+    }
 
     let normalizedStudentAddress = form.studentAddress.trim();
     const maybePrivateKey = normalizedStudentAddress.replace(/^0x/, "");
@@ -58,6 +66,8 @@ export default function IssuePage() {
     setResult(null);
 
     try {
+      // ── Step 1: Prepare (IPFS upload + metadata) ───────
+      setStatus("⬆️ Uploading certificate to IPFS...");
       const fd = new FormData();
       fd.append("certificate", file);
       Object.entries({
@@ -65,17 +75,66 @@ export default function IssuePage() {
         studentAddress: normalizedStudentAddress,
       }).forEach(([k, v]) => fd.append(k, v));
 
-      const res = await issueCertificate(fd);
-      setResult(res.data);
+      const prepRes = await prepareIssuance(fd);
+      const prep = prepRes.data;
+
+      // ── Step 2: Sign via MetaMask ──────────────────────
+      setStatus("🦊 Please confirm the transaction in MetaMask...");
+      const browserProvider = new ethers.BrowserProvider(window.ethereum);
+      await browserProvider.send("eth_requestAccounts", []);
+      const signer = await browserProvider.getSigner();
+
+      const contractAddr = prep.contractAddress || CONTRACT_ADDRESS;
+      if (!contractAddr) {
+        throw new Error("Contract address not configured. Set REACT_APP_CONTRACT_ADDRESS in .env");
+      }
+
+      const contract = new ethers.Contract(contractAddr, CERTIFICATE_REGISTRY_ABI, signer);
+      const tx = await contract.issueCertificate(
+        prep.certId,
+        prep.hash,
+        prep.cid,
+        prep.studentAddress,
+        prep.metadata
+      );
+
+      setStatus("⛓️ Waiting for blockchain confirmation...");
+      const receipt = await tx.wait();
+      const txHash = receipt.hash;
+
+      // ── Step 3: Confirm (save to DB) ───────────────────
+      setStatus("💾 Saving certificate record...");
+      const confirmRes = await confirmIssuance({
+        certId: prep.certId,
+        txHash,
+        cid: prep.cid,
+        hash: prep.hash,
+        studentAddress: prep.studentAddress,
+        studentName: prep.studentName,
+        courseName: prep.courseName,
+        grade: prep.grade,
+        issueDate: prep.issueDate,
+        organizationName: prep.organizationName,
+        qrCode: prep.qrCode,
+        verifyUrl: prep.verifyUrl,
+      });
+
+      setResult(confirmRes.data);
       setFile(null);
     } catch (err) {
-      const apiError = err.response?.data;
-      const msg = apiError?.details
-        ? `${apiError.error}: ${apiError.details}`
-        : apiError?.error || "Issuance failed";
-      setError(msg);
+      // MetaMask user rejection
+      if (err.code === 4001 || err.code === "ACTION_REJECTED") {
+        setError("Transaction was rejected in MetaMask.");
+      } else {
+        const apiError = err.response?.data;
+        const msg = apiError?.details
+          ? `${apiError.error}: ${apiError.details}`
+          : apiError?.error || err.message || "Issuance failed";
+        setError(msg);
+      }
     } finally {
       setLoading(false);
+      setStatus("");
     }
   }
 
@@ -120,7 +179,7 @@ export default function IssuePage() {
           {error && <div className="alert alert-error">{error}</div>}
 
           <button type="submit" className="btn btn-primary" disabled={loading || !file}>
-            {loading ? "⏳ Uploading to IPFS & Blockchain…" : "🚀 Issue Certificate"}
+            {loading ? (status || "⏳ Processing…") : "🚀 Issue Certificate"}
           </button>
         </form>
 

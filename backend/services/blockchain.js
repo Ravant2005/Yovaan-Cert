@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// ABI — only the functions we call from the backend
+// ABI — only the functions we call
 const ABI = [
   "function issueCertificate(string certId, string hash, string cid, address student, string metadata) external",
   "function revokeCertificate(string certId) external",
@@ -13,7 +13,7 @@ const ABI = [
   "function authorizedIssuers(address) external view returns (bool)",
 ];
 
-let provider, signer, contract;
+let provider, revokeSigner, contract;
 const DEFAULT_AMOY_RPC = "https://rpc-amoy.polygon.technology";
 
 function getRpcUrl() {
@@ -37,36 +37,33 @@ function getProvider() {
   return provider;
 }
 
-function getSigner() {
-  if (!signer) {
-    signer = new ethers.Wallet(normalizePrivateKey(process.env.ISSUER_PRIVATE_KEY), getProvider());
+/**
+ * Signer used ONLY for admin-initiated revocations.
+ * Certificate issuance signing has been moved to the frontend (MetaMask).
+ */
+function getRevokeSigner() {
+  if (!revokeSigner) {
+    const key = process.env.REVOKE_PRIVATE_KEY || process.env.ISSUER_PRIVATE_KEY;
+    if (!key) {
+      throw new Error("REVOKE_PRIVATE_KEY (or legacy ISSUER_PRIVATE_KEY) is required for revocation");
+    }
+    revokeSigner = new ethers.Wallet(normalizePrivateKey(key), getProvider());
   }
-  return signer;
+  return revokeSigner;
 }
 
 function getContract(withSigner = false) {
-  const runner = withSigner ? getSigner() : getProvider();
+  const runner = withSigner ? getRevokeSigner() : getProvider();
   if (!contract) {
     contract = new ethers.Contract(process.env.CONTRACT_ADDRESS, ABI, runner);
   }
   return withSigner ? contract.connect(runner) : contract;
 }
 
-// ── Write Operations ─────────────────────────────────────
+// ── Write Operations (admin-only revocation) ──────────────
 
 /**
- * Issues a certificate on-chain
- * @returns {string} Transaction hash
- */
-export async function issueCertificateOnChain({ certId, hash, cid, studentAddress, metadata }) {
-  const c = getContract(true);
-  const tx = await c.issueCertificate(certId, hash, cid, studentAddress, metadata);
-  const receipt = await tx.wait();
-  return receipt.hash;
-}
-
-/**
- * Revokes a certificate on-chain
+ * Revokes a certificate on-chain (admin operation, uses server signer)
  * @returns {string} Transaction hash
  */
 export async function revokeCertificateOnChain(certId) {
@@ -85,14 +82,14 @@ export async function getCertificateFromChain(certId) {
   const c = getContract(false);
   const raw = await c.getCertificate(certId);
   return {
-    certId:    raw.certId,
-    hash:      raw.hash,
-    cid:       raw.cid,
-    issuer:    raw.issuer,
-    student:   raw.student,
+    certId: raw.certId,
+    hash: raw.hash,
+    cid: raw.cid,
+    issuer: raw.issuer,
+    student: raw.student,
     timestamp: Number(raw.timestamp),
-    revoked:   raw.revoked,
-    metadata:  raw.metadata,
+    revoked: raw.revoked,
+    metadata: raw.metadata,
   };
 }
 
@@ -113,4 +110,4 @@ export async function checkCertificateOnChain(certId) {
   return { exists, revoked };
 }
 
-export { getProvider, getSigner };
+export { getProvider };
