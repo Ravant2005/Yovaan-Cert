@@ -1,6 +1,14 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
+// ── Startup guard ────────────────────────────────────────
+// Runs at module-import time (server boot). If JWT_SECRET is missing the
+// app exits immediately instead of silently signing tokens with `undefined`.
+if (!process.env.JWT_SECRET) {
+  console.error("FATAL: JWT_SECRET environment variable is not set. Server cannot start.");
+  process.exit(1);
+}
+
 export function protect(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {

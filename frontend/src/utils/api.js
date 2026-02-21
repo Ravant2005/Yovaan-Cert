@@ -31,10 +31,22 @@ export const login = (email, password) =>
   api.post("/auth/login", { email, password });
 
 // ── Certificates ─────────────────────────────────────────
-export const issueCertificate = (formData) =>
-  api.post("/certificates/issue", formData, {
+
+/**
+ * Step 1: Upload PDF to IPFS and get preparation data.
+ * Does NOT write to blockchain or database.
+ */
+export const prepareIssuance = (formData) =>
+  api.post("/certificates/issue/prepare", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
+
+/**
+ * Step 2: After MetaMask signs the transaction, confirm the
+ * issuance so the backend creates the MongoDB record.
+ */
+export const confirmIssuance = (data) =>
+  api.post("/certificates/issue/confirm", data);
 
 export const listCertificates = (params) =>
   api.get("/certificates", { params });

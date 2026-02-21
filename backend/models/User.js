@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
-import crypto from "crypto";
+import bcrypt from "bcryptjs";
+
+const BCRYPT_ROUNDS = 12;
 
 const UserSchema = new mongoose.Schema(
   {
@@ -32,19 +34,20 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Hash password before saving
-UserSchema.pre("save", function (next) {
+// Hash password before saving — bcrypt adds a unique salt per hash automatically
+UserSchema.pre("save", async function (next) {
   if (!this.isModified("passwordHash")) return next();
-  this.passwordHash = crypto
-    .createHash("sha256")
-    .update(this.passwordHash)
-    .digest("hex");
-  next();
+  try {
+    this.passwordHash = await bcrypt.hash(this.passwordHash, BCRYPT_ROUNDS);
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
+// Compare a plaintext password against the stored bcrypt hash
 UserSchema.methods.checkPassword = function (password) {
-  const hashed = crypto.createHash("sha256").update(password).digest("hex");
-  return hashed === this.passwordHash;
+  return bcrypt.compare(password, this.passwordHash);
 };
 
 export default mongoose.model("User", UserSchema);

@@ -157,26 +157,34 @@ export function getIPFSUrl(cid) {
 
 export async function fetchIPFSFile(cid) {
   const urls = getIPFSGatewayUrls(cid);
-  const errors = [];
+  const timeout = Number(process.env.IPFS_FETCH_TIMEOUT_MS || 15000);
+  const controller = new AbortController();
 
-  for (const url of urls) {
-    try {
-      const response = await axios.get(url, {
+  const racePromises = urls.map((url) =>
+    axios
+      .get(url, {
         responseType: "arraybuffer",
-        timeout: Number(process.env.IPFS_FETCH_TIMEOUT_MS || 15000),
-      });
-
-      return {
+        timeout,
+        signal: controller.signal,
+      })
+      .then((response) => ({
         buffer: Buffer.from(response.data),
         contentType: response.headers["content-type"] || "application/octet-stream",
         sourceUrl: url,
-      };
-    } catch (err) {
-      errors.push(`${url} -> ${err.response?.status || err.code || err.message}`);
-    }
-  }
+      }))
+  );
 
-  throw new Error(`Unable to fetch CID ${cid} from IPFS gateways: ${errors.join(" | ")}`);
+  try {
+    const result = await Promise.any(racePromises);
+    // Cancel remaining in-flight requests
+    controller.abort();
+    return result;
+  } catch (aggregateError) {
+    const details = aggregateError.errors
+      .map((err, i) => `${urls[i]} -> ${err.response?.status || err.code || err.message}`)
+      .join(" | ");
+    throw new Error(`Unable to fetch CID ${cid} from IPFS gateways: ${details}`);
+  }
 }
 
 export { IPFSUploadError, getIPFSGatewayUrls };

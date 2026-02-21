@@ -12,7 +12,7 @@ router.post("/login", async (req, res) => {
     return res.status(400).json({ error: "Email and password required" });
 
   const user = await User.findOne({ email, active: true });
-  if (!user || !user.checkPassword(password))
+  if (!user || !(await user.checkPassword(password)))
     return res.status(401).json({ error: "Invalid credentials" });
 
   const token = jwt.sign(
