@@ -1,5 +1,7 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
+import dotenv from "dotenv";
+dotenv.config();
 
 // ── Startup guard ────────────────────────────────────────
 // Runs at module-import time (server boot). If JWT_SECRET is missing the
