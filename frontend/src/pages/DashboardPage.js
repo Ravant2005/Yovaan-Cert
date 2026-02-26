@@ -10,16 +10,16 @@ export default function DashboardPage() {
     listCertificates({ limit: 5 }).then(res => {
       const certs = res.data.certs;
       setStats({
-        total:   res.data.total,
-        active:  certs.filter(c => !c.revoked).length,
-        revoked: certs.filter(c =>  c.revoked).length,
-        recent:  certs.slice(0, 5),
+        total: res.data.total,
+        active: certs.filter(c => !c.revoked).length,
+        revoked: certs.filter(c => c.revoked).length,
+        recent: certs.slice(0, 5),
       });
     }).finally(() => setLoading(false));
   }, []);
 
-  const StatCard = ({ icon, label, value, color }) => (
-    <div className="stat-card" style={{ borderTopColor: color }}>
+  const StatCard = ({ icon, label, value }) => (
+    <div className="stat-card">
       <div className="stat-icon">{icon}</div>
       <div className="stat-value">{loading ? "…" : value}</div>
       <div className="stat-label">{label}</div>
@@ -28,11 +28,16 @@ export default function DashboardPage() {
 
   return (
     <Layout title="Dashboard">
+      {/* Premium Headline */}
+      <div className="dashboard-headline">
+        <h2>Every certificate is the permanent truth,<br />Every talent is protected.</h2>
+      </div>
+
       <div className="stats-grid">
-        <StatCard icon="📜" label="Total Issued"  value={stats.total}   color="#4f46e5" />
-        <StatCard icon="✅" label="Active"         value={stats.active}  color="#16a34a" />
-        <StatCard icon="🚫" label="Revoked"        value={stats.revoked} color="#dc2626" />
-        <StatCard icon="⛓️" label="Network"        value="Polygon"       color="#8b5cf6" />
+        <StatCard icon="📜" label="Total Issued" value={stats.total} />
+        <StatCard icon="✅" label="Active" value={stats.active} />
+        <StatCard icon="🚫" label="Revoked" value={stats.revoked} />
+        <StatCard icon="⛓️" label="Network" value="Polygon" />
       </div>
 
       <div className="card" style={{ marginTop: 24 }}>
@@ -84,6 +89,11 @@ export default function DashboardPage() {
           <strong>Tamper Check</strong>
           <small>Detect modified certificates</small>
         </a>
+      </div>
+
+      {/* Bottom Declaration */}
+      <div className="dashboard-declaration">
+        <p>Fake it until you make it — ends here.</p>
       </div>
     </Layout>
   );

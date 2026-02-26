@@ -279,7 +279,7 @@ export default function IssuePage() {
               {field("Course / Program Name", "courseName", "text", "Full Stack Development")}
               {field("Grade / Score", "grade", "text", "A+")}
               {field("Issue Date", "issueDate", "date")}
-              {field("Organization Name", "organizationName", "text", "Yovaan AI Academy")}
+              {field("Organization Name", "organizationName", "text", "CertiChain Academy")}
             </div>
 
             {info && <div className="alert alert-success">{info}</div>}

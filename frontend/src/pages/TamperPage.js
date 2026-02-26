@@ -11,11 +11,11 @@ async function sha256Hex(file) {
 }
 
 export default function TamperPage() {
-  const [file, setFile]       = useState(null);
-  const [certId, setCertId]   = useState("");
-  const [result, setResult]   = useState(null);
+  const [file, setFile] = useState(null);
+  const [certId, setCertId] = useState("");
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
+  const [error, setError] = useState("");
   const [loadingMessage, setLoadingMessage] = useState("");
 
   const onDrop = useCallback(accepted => setFile(accepted[0]), []);
@@ -30,7 +30,7 @@ export default function TamperPage() {
     if (!certId) return;
     const normalizedCertId = certId.trim().toUpperCase();
     if (!/^YOVAAN-[A-Z0-9]{8}$/.test(normalizedCertId)) {
-      return setError("Invalid certId format. Expected: YOVAAN-XXXXXXXX");
+      return setError("Invalid certId format. Expected: YOVAAN-XXXXXXXX (e.g. YOVAAN-A1B2C3D4)");
     }
 
     setError("");
@@ -86,7 +86,7 @@ export default function TamperPage() {
               type="text"
               value={certId}
               onChange={e => setCertId(e.target.value.toUpperCase())}
-              placeholder="YOVAAN-XXXXXXXX"
+              placeholder="YOVAAN-A1B2C3D4"
               required
             />
           </div>

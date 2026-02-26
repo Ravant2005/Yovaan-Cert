@@ -6,10 +6,10 @@ const TX_EXPLORER_URL = process.env.REACT_APP_TX_EXPLORER_URL || "https://amoy.p
 
 export default function VerifyPage() {
   const [searchParams] = useSearchParams();
-  const [certId, setCertId]   = useState(searchParams.get("certId") || "");
-  const [result, setResult]   = useState(null);
+  const [certId, setCertId] = useState(searchParams.get("certId") || "");
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
+  const [error, setError] = useState("");
 
   // Auto-verify if certId comes from URL (QR scan)
   useEffect(() => {
@@ -33,16 +33,16 @@ export default function VerifyPage() {
   }
 
   function StatusBanner({ valid, revoked }) {
-    if (revoked)  return <div className="status-banner status-revoked">🚫 CERTIFICATE REVOKED</div>;
-    if (valid)    return <div className="status-banner status-valid">✅ CERTIFICATE VALID</div>;
-    return              <div className="status-banner status-invalid">❌ CERTIFICATE NOT FOUND</div>;
+    if (revoked) return <div className="status-banner status-revoked">🚫 CERTIFICATE REVOKED</div>;
+    if (valid) return <div className="status-banner status-valid">✅ CERTIFICATE VALID</div>;
+    return <div className="status-banner status-invalid">❌ CERTIFICATE NOT FOUND</div>;
   }
 
   return (
     <div className="verify-wrapper">
       <div className="verify-header">
         <span className="logo-icon">⛓️</span>
-        <h1>Yovaan AI</h1>
+        <h1>CertiChain</h1>
         <p>Decentralized Certificate Verification</p>
       </div>
 
@@ -54,7 +54,7 @@ export default function VerifyPage() {
               type="text"
               value={certId}
               onChange={e => setCertId(e.target.value)}
-              placeholder="YOVAAN-XXXXXXXX"
+              placeholder="CERT-XXXXXXXX"
               className="verify-input"
             />
             <button type="submit" className="btn btn-primary" disabled={loading}>
@@ -99,7 +99,7 @@ export default function VerifyPage() {
                       <td>
                         {result.txHash ? (
                           <a href={`${TX_EXPLORER_URL}/${result.txHash}`}
-                             target="_blank" rel="noreferrer">
+                            target="_blank" rel="noreferrer">
                             {result.txHash.slice(0, 20)}…
                           </a>
                         ) : "—"}
@@ -128,7 +128,7 @@ export default function VerifyPage() {
                   <p>Revoked on: {new Date(result.revokedAt).toLocaleString()}</p>
                   {result.revokedTxHash && (
                     <a href={`${TX_EXPLORER_URL}/${result.revokedTxHash}`}
-                       target="_blank" rel="noreferrer">
+                      target="_blank" rel="noreferrer">
                       Revocation TX →
                     </a>
                   )}
