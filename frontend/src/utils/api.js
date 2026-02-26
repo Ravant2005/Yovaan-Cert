@@ -48,6 +48,15 @@ export const prepareIssuance = (formData) =>
 export const confirmIssuance = (data) =>
   api.post("/certificates/issue/confirm", data);
 
+/**
+ * AI Auto-Extract: Upload PDF/image → OCR + Ollama → structured metadata.
+ */
+export const extractCertificateMetadata = (formData) =>
+  api.post("/certificates/auto-extract", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 180000, // OCR + Ollama can be slow
+  });
+
 export const listCertificates = (params) =>
   api.get("/certificates", { params });
 

@@ -2,6 +2,8 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import { protect, adminOnly } from "../middleware/auth.js";
+import dotenv from "dotenv";
+dotenv.config();
 
 const router = Router();
 

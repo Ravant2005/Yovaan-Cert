@@ -11,10 +11,10 @@
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [How It Works](#how-it-works)
-  - [Certificate Issuance Flow](#1-certificate-issuance-flow)
-  - [Certificate Verification Flow](#2-certificate-verification-flow)
-  - [Tamper Detection Flow](#3-tamper-detection-flow)
-  - [Revocation Flow](#4-revocation-flow)
+- [Certificate Issuance Flow](#1-certificate-issuance-flow)
+- [Certificate Verification Flow](#2-certificate-verification-flow)
+- [Tamper Detection Flow](#3-tamper-detection-flow)
+- [Revocation Flow](#4-revocation-flow)
 - [Security Features](#security-features)
 - [Prerequisites](#prerequisites)
 - [Environment Setup](#environment-setup)
@@ -44,40 +44,40 @@ The system is designed so that **no single server** can forge or tamper with a c
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (React CRA)                         │
-│                                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
-│  │  Login   │  │  Issue   │  │  Verify  │  │  Tamper  │            │
-│  │  Page    │  │  Page    │  │  Page    │  │  Check   │            │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘            │
-│       │              │              │              │                 │
-│       │         ┌────▼─────┐        │              │                 │
-│       │         │ MetaMask │        │              │                 │
-│       │         │ (ethers) │        │              │                 │
-│       │         └────┬─────┘        │              │                 │
-└───────┼──────────────┼──────────────┼──────────────┼────────────────┘
-        │              │              │              │
-        ▼              ▼              ▼              ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                     BACKEND (Express + Node.js)                     │
-│                                                                     │
+┌────────────────────────────────────────────────────────────────────┐
+│                        FRONTEND (React CRA)                        │
+│                                                                    │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐  ┌──────────┐          │
+│  │  Login   │   │  Issue   │   │  Verify  │  │  Tamper  │          │
+│  │  Page    │   │  Page    │   │  Page    │  │  Check   │          │
+│  └────┬─────┘   └────┬─────┘   └────┬─────┘  └────┬─────┘          │
+│       │              │              │             │                │
+│       │         ┌────▼─────┐        │             │                │
+│       │         │ MetaMask │        │             │                │
+│       │         │ (ethers) │        │             │                │
+│       │         └────┬─────┘        │             │                │
+└───────┼──────────────┼──────────────┼─────────────┼────────────────┘
+        │              │              │             │
+        ▼              ▼              ▼             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                     BACKEND (Express + Node.js)                    │
+│                                                                    │
 │  ┌──────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐        │
 │  │  Auth    │  │ Certificates │  │  Verify  │  │  IPFS    │        │
 │  │  Routes  │  │   Routes     │  │  Routes  │  │  Routes  │        │
 │  └────┬─────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘        │
-│       │               │               │              │              │
+│       │               │               │              │             │
 │  ┌────▼─────┐  ┌──────▼───────┐  ┌────▼─────────────▼─────┐        │
-│  │ MongoDB  │  │  Blockchain  │  │     IPFS Service        │        │
-│  │ (Users)  │  │   Service    │  │  (Pinata + Gateways)    │        │
-│  └──────────┘  └──────┬───────┘  └────────────┬────────────┘        │
-└───────────────────────┼───────────────────────┼─────────────────────┘
+│  │ MongoDB  │  │  Blockchain  │  │     IPFS Service       │        │
+│  │ (Users)  │  │   Service    │  │  (Pinata + Gateways)   │        │
+│  └──────────┘  └──────┬───────┘  └────────────┬───────────┘        │
+└───────────────────────┼───────────────────────┼────────────────────┘
                         │                       │
                         ▼                       ▼
              ┌──────────────────┐    ┌─────────────────┐
-             │  Polygon Amoy    │    │   IPFS / Pinata  │
-             │  Smart Contract  │    │   (PDF Storage)  │
-             │  (CertRegistry)  │    │                  │
+             │  Polygon Amoy    │    │   IPFS / Pinata │
+             │  Smart Contract  │    │   (PDF Storage) │
+             │  (CertRegistry)  │    │                 │
              └──────────────────┘    └─────────────────┘
 ```
 
@@ -184,9 +184,9 @@ The issuance process is a **three-step handshake** between the frontend, backend
        │     certId, hash, cid,                                │
        │     studentAddr, metadata)                            │
        │◀──────────────────── tx receipt ──────────────────────│
-       │                            │                          │
+       │                             │                          │
        │──── POST /issue/confirm ──▶│                          │
-       │     (certId + txHash)      │── Save to MongoDB        │
+       │     (certId + txHash)       │── Save to MongoDB        │
        │◀──── { success, result } ──│                          │
 ```
 
@@ -494,7 +494,7 @@ curl -X POST http://localhost:5000/api/auth/login \
 ```
 
 ### Prepare a certificate (API only)
-
+  
 ```bash
 TOKEN=<JWT_FROM_LOGIN>
 curl -X POST http://localhost:5000/api/certificates/issue/prepare \

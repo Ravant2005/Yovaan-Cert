@@ -1,11 +1,12 @@
 /**
  * Certificate Routes
- * POST /api/certificates/issue/prepare  — Upload PDF to IPFS, return preparation data
- * POST /api/certificates/issue/confirm  — Save DB record after frontend MetaMask signing
- * GET  /api/certificates                — List all (issuer)
- * GET  /api/certificates/:certId        — Single cert details
- * POST /api/certificates/revoke         — Revoke a cert
- * POST /api/certificates/tamper-check   — Hash compare
+ * POST /api/certificates/issue/prepare   — Upload PDF to IPFS, return preparation data
+ * POST /api/certificates/issue/confirm   — Save DB record after frontend MetaMask signing
+ * POST /api/certificates/auto-extract    — AI-powered OCR + Ollama metadata extraction
+ * GET  /api/certificates                 — List all (issuer)
+ * GET  /api/certificates/:certId         — Single cert details
+ * POST /api/certificates/revoke          — Revoke a cert
+ * POST /api/certificates/tamper-check    — Hash compare
  * GET  /api/certificates/student/:address — Student's cert history
  */
 
@@ -17,6 +18,7 @@ import Joi from "joi";
 import { v4 as uuidv4 } from "uuid";
 import { ethers } from "ethers";
 import { protect } from "../middleware/auth.js";
+import { extractCertificateText, sendToOllama } from "../services/ai.js";
 import Certificate from "../models/Certificate.js";
 import {
   revokeCertificateOnChain,
@@ -254,6 +256,102 @@ router.get("/", protect, async (req, res) => {
     res.json({ certs, total, page: Number(page), pages: Math.ceil(total / limit) });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+import fs from "fs";
+import os from "os";
+import path from "path";
+
+// ── AI AUTO-EXTRACT (Tesseract OCR + Ollama) ─────────────
+// Accepts a PDF or image, extracts text via OCR (with
+// pdf-parse fast-path for text-layer PDFs), then uses a
+// local Ollama model to parse structured certificate metadata.
+
+const autoExtractUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
+  fileFilter: (_, file, cb) => {
+    const allowed = ["application/pdf", "image/png", "image/jpeg", "image/jpg"];
+    if (!allowed.includes(file.mimetype)) {
+      return cb(new Error("Only PDF, PNG, and JPEG files are accepted"), false);
+    }
+    cb(null, true);
+  },
+});
+
+router.post("/auto-extract", protect, autoExtractUpload.single("certificate"), async (req, res) => {
+  let tempFilePath = null;
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    console.log(`\n🤖 [Auto-Extract] Received ${req.file.mimetype} (${(req.file.size / 1024).toFixed(1)} KB)`);
+
+    // ── Create Temp File ──────────────────────────────────
+    // Write buffer to disk because extraction libraries require a physical path
+    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+    tempFilePath = path.join(os.tmpdir(), `certichain-upload-${Date.now()}-${safeName}`);
+    fs.writeFileSync(tempFilePath, req.file.buffer);
+    console.log(`📁 Saved temporary file to: ${tempFilePath}`);
+
+    // 1. Extract text (pdf-parse → Tesseract OCR fallback)
+    let rawText;
+    try {
+      rawText = await extractCertificateText(tempFilePath, req.file.mimetype, safeName);
+    } catch (extractErr) {
+      console.error("[Text Extraction Error]", extractErr.message);
+      return res.json({
+        success: false,
+        data: null,
+        error: `Text extraction failed: ${extractErr.message}`,
+      });
+    }
+
+    if (!rawText || rawText.trim().length < 10) {
+      return res.json({
+        success: false,
+        data: null,
+        error: "Could not extract meaningful text from this document.",
+      });
+    }
+
+    console.log(`📝 Extracted ${rawText.length} chars — sending to Ollama...`);
+
+    // 2. Send to Ollama for structured JSON extraction
+    let extractedData;
+    try {
+      extractedData = await sendToOllama(rawText);
+    } catch (ollamaErr) {
+      console.error("[Ollama Error]", ollamaErr.message);
+      return res.json({
+        success: false,
+        data: null,
+        error: `AI extraction failed: ${ollamaErr.message}. You can fill the form manually.`,
+      });
+    }
+
+    console.log("✅ Ollama returned:", extractedData);
+    res.json({ success: true, data: extractedData });
+  } catch (err) {
+    console.error("[Auto-Extract Error]", err);
+    res.json({
+      success: false,
+      data: null,
+      error: err.message || "Auto-extraction failed unexpectedly",
+    });
+  } finally {
+    // ── Cleanup Temp File ────────────────────────────────
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      try {
+        fs.unlinkSync(tempFilePath);
+        console.log(`🗑️ Cleaned up uploaded file: ${tempFilePath}`);
+      } catch (cleanupErr) {
+        console.warn(`⚠️ Failed to clean up ${tempFilePath}:`, cleanupErr.message);
+      }
+    }
   }
 });
 
