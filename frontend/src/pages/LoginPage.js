@@ -4,10 +4,10 @@ import { login } from "../utils/api";
 import "./styles.css";
 
 export default function LoginPage() {
-  const [email, setEmail]       = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError]       = useState("");
-  const [loading, setLoading]   = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   async function handleSubmit(e) {
@@ -17,7 +17,7 @@ export default function LoginPage() {
     try {
       const res = await login(email, password);
       localStorage.setItem("token", res.data.token);
-      localStorage.setItem("user",  JSON.stringify(res.data.user));
+      localStorage.setItem("user", JSON.stringify(res.data.user));
       navigate("/");
     } catch (err) {
       setError(err.response?.data?.error || "Login failed");
@@ -31,7 +31,7 @@ export default function LoginPage() {
       <div className="auth-card">
         <div className="auth-logo">
           <span className="logo-icon">⛓️</span>
-          <h1>Yovaan AI</h1>
+          <h1>CertiChain</h1>
           <p>Decentralized Certificate Authentication</p>
         </div>
 
@@ -43,7 +43,7 @@ export default function LoginPage() {
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
-              placeholder="admin@yovaanai.com"
+              placeholder="admin@certichain.io"
             />
           </div>
           <div className="field">

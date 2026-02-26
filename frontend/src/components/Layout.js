@@ -12,12 +12,12 @@ export default function Layout({ title, children }) {
   }
 
   const navItems = [
-    { to: "/",       icon: "📊", label: "Dashboard" },
-    { to: "/issue",  icon: "📜", label: "Issue Certificate" },
-    { to: "/certs",  icon: "🗂️",  label: "Certificates" },
+    { to: "/", icon: "📊", label: "Dashboard" },
+    { to: "/issue", icon: "📜", label: "Issue Certificate" },
+    { to: "/certs", icon: "🗂️", label: "Certificates" },
     { to: "/verify", icon: "🔍", label: "Verify Portal" },
     { to: "/tamper", icon: "🔬", label: "Tamper Check" },
-    { to: "/student",icon: "👤", label: "Credential History" },
+    { to: "/student", icon: "👤", label: "Credential History" },
   ];
 
   return (
@@ -26,7 +26,7 @@ export default function Layout({ title, children }) {
       <aside className="sidebar">
         <div className="sidebar-logo">
           <span>⛓️</span>
-          <span>Yovaan AI</span>
+          <span>CertiChain</span>
         </div>
 
         <nav className="sidebar-nav">
