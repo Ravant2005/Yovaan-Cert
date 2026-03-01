@@ -1,12 +1,9 @@
 import React, { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
-import { ethers, isAddress, Wallet } from "ethers";
-import { prepareIssuance, confirmIssuance, extractCertificateMetadata } from "../utils/api";
-import { CERTIFICATE_REGISTRY_ABI } from "../utils/contractABI";
+import { issueCertificate, extractCertificateMetadata } from "../utils/api";
 import Layout from "../components/Layout";
 
 const TX_EXPLORER_URL = process.env.REACT_APP_TX_EXPLORER_URL || "https://amoy.polygonscan.com/tx";
-const CONTRACT_ADDRESS = process.env.REACT_APP_CONTRACT_ADDRESS;
 
 export default function IssuePage() {
   // ── UI phase: upload → processing → verifying → form ──
@@ -24,7 +21,6 @@ export default function IssuePage() {
   });
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
@@ -55,7 +51,7 @@ export default function IssuePage() {
           ...prev,
           studentName: data.studentName || prev.studentName,
           courseName: data.courseName || prev.courseName,
-          grade: data.grade || prev.grade,
+          grade: data.grade || "A",
           organizationName: data.organizationName || prev.organizationName,
           issueDate: data.issueDate || prev.issueDate,
         }));
@@ -102,97 +98,26 @@ export default function IssuePage() {
     e.preventDefault();
     if (!file) return setError("Please upload a certificate file");
 
-    if (!window.ethereum) {
-      return setError("MetaMask is not installed. Please install MetaMask to issue certificates.");
-    }
-
-    let normalizedStudentAddress = form.studentAddress.trim();
-    const maybePrivateKey = normalizedStudentAddress.replace(/^0x/, "");
-    if (/^[0-9a-fA-F]{64}$/.test(maybePrivateKey)) {
-      try {
-        normalizedStudentAddress = new Wallet(`0x${maybePrivateKey}`).address;
-        setInfo(`Private key converted to wallet address: ${normalizedStudentAddress}`);
-        setForm((prev) => ({ ...prev, studentAddress: normalizedStudentAddress }));
-      } catch {
-        return setError("Invalid private key format");
-      }
-    } else {
-      setInfo("");
-    }
-    if (!isAddress(normalizedStudentAddress)) {
-      return setError("Invalid student wallet address. Expected format: 0x...");
-    }
-
     setError("");
     setLoading(true);
     setResult(null);
 
     try {
-      // ── Step 1: Prepare (IPFS upload + metadata) ───────
-      setStatus("⬆️ Uploading certificate to IPFS...");
+      // Single API call — backend handles IPFS + blockchain + DB
+      setStatus("⬆️ Uploading and issuing certificate...");
       const fd = new FormData();
       fd.append("certificate", file);
-      Object.entries({
-        ...form,
-        studentAddress: normalizedStudentAddress,
-      }).forEach(([k, v]) => fd.append(k, v));
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v));
 
-      const prepRes = await prepareIssuance(fd);
-      const prep = prepRes.data;
-
-      // ── Step 2: Sign via MetaMask ──────────────────────
-      setStatus("🦊 Please confirm the transaction in MetaMask...");
-      const browserProvider = new ethers.BrowserProvider(window.ethereum);
-      await browserProvider.send("eth_requestAccounts", []);
-      const signer = await browserProvider.getSigner();
-
-      const contractAddr = prep.contractAddress || CONTRACT_ADDRESS;
-      if (!contractAddr) {
-        throw new Error("Contract address not configured. Set REACT_APP_CONTRACT_ADDRESS in .env");
-      }
-
-      const contract = new ethers.Contract(contractAddr, CERTIFICATE_REGISTRY_ABI, signer);
-      const tx = await contract.issueCertificate(
-        prep.certId,
-        prep.hash,
-        prep.cid,
-        prep.studentAddress,
-        prep.metadata
-      );
-
-      setStatus("⛓️ Waiting for blockchain confirmation...");
-      const receipt = await tx.wait();
-      const txHash = receipt.hash;
-
-      // ── Step 3: Confirm (save to DB) ───────────────────
-      setStatus("💾 Saving certificate record...");
-      const confirmRes = await confirmIssuance({
-        certId: prep.certId,
-        txHash,
-        cid: prep.cid,
-        hash: prep.hash,
-        studentAddress: prep.studentAddress,
-        studentName: prep.studentName,
-        courseName: prep.courseName,
-        grade: prep.grade,
-        issueDate: prep.issueDate,
-        organizationName: prep.organizationName,
-        qrCode: prep.qrCode,
-        verifyUrl: prep.verifyUrl,
-      });
-
-      setResult(confirmRes.data);
+      const res = await issueCertificate(fd);
+      setResult(res.data);
       setFile(null);
     } catch (err) {
-      if (err.code === 4001 || err.code === "ACTION_REJECTED") {
-        setError("Transaction was rejected in MetaMask.");
-      } else {
-        const apiError = err.response?.data;
-        const msg = apiError?.details
-          ? `${apiError.error}: ${apiError.details}`
-          : apiError?.error || err.message || "Issuance failed";
-        setError(msg);
-      }
+      const apiError = err.response?.data;
+      const msg = apiError?.details
+        ? `${apiError.error}: ${apiError.details}`
+        : apiError?.error || err.message || "Issuance failed";
+      setError(msg);
     } finally {
       setLoading(false);
       setStatus("");
@@ -277,12 +202,11 @@ export default function IssuePage() {
               {field("Student Wallet Address (or Private Key)", "studentAddress", "text", "0x... or 64-char key")}
               {field("Student Name", "studentName", "text", "Arjun Sharma")}
               {field("Course / Program Name", "courseName", "text", "Full Stack Development")}
-              {field("Grade / Score", "grade", "text", "A+")}
+              {field("Grade / Score", "grade", "text", "A")}
               {field("Issue Date", "issueDate", "date")}
               {field("Organization Name", "organizationName", "text", "CertiChain Academy")}
             </div>
 
-            {info && <div className="alert alert-success">{info}</div>}
             {error && <div className="alert alert-error">{error}</div>}
 
             <button type="submit" className="btn btn-primary" disabled={loading || !file}>

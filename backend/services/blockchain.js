@@ -13,7 +13,7 @@ const ABI = [
   "function authorizedIssuers(address) external view returns (bool)",
 ];
 
-let provider, revokeSigner, contract;
+let provider, issueSigner, revokeSigner, contract;
 const DEFAULT_AMOY_RPC = "https://rpc-amoy.polygon.technology";
 
 function getRpcUrl() {
@@ -38,8 +38,21 @@ function getProvider() {
 }
 
 /**
- * Signer used ONLY for admin-initiated revocations.
- * Certificate issuance signing has been moved to the frontend (MetaMask).
+ * Signer used for certificate issuance (uses ISSUER_PRIVATE_KEY from .env).
+ */
+function getIssueSigner() {
+  if (!issueSigner) {
+    const key = process.env.ISSUER_PRIVATE_KEY;
+    if (!key) {
+      throw new Error("ISSUER_PRIVATE_KEY is required for certificate issuance");
+    }
+    issueSigner = new ethers.Wallet(normalizePrivateKey(key), getProvider());
+  }
+  return issueSigner;
+}
+
+/**
+ * Signer used for admin-initiated revocations.
  */
 function getRevokeSigner() {
   if (!revokeSigner) {
@@ -52,22 +65,36 @@ function getRevokeSigner() {
   return revokeSigner;
 }
 
-function getContract(withSigner = false) {
-  const runner = withSigner ? getRevokeSigner() : getProvider();
+function getContract(signer) {
+  const runner = signer || getProvider();
   if (!contract) {
     contract = new ethers.Contract(process.env.CONTRACT_ADDRESS, ABI, runner);
   }
-  return withSigner ? contract.connect(runner) : contract;
+  return signer ? contract.connect(runner) : contract;
 }
 
-// ── Write Operations (admin-only revocation) ──────────────
+// ── Write Operations ─────────────────────────────────────
+
+/**
+ * Issues a certificate on-chain (server-signed using ISSUER_PRIVATE_KEY).
+ * @returns {string} Transaction hash
+ */
+export async function issueCertificateOnChain(certId, hash, cid, studentAddress, metadata) {
+  const c = getContract(getIssueSigner());
+  console.log("⛓️  Submitting issueCertificate to chain...");
+  const tx = await c.issueCertificate(certId, hash, cid, studentAddress, metadata);
+  console.log("⏳ Waiting for blockchain confirmation...");
+  const receipt = await tx.wait();
+  console.log("✅ Blockchain TX confirmed:", receipt.hash);
+  return receipt.hash;
+}
 
 /**
  * Revokes a certificate on-chain (admin operation, uses server signer)
  * @returns {string} Transaction hash
  */
 export async function revokeCertificateOnChain(certId) {
-  const c = getContract(true);
+  const c = getContract(getRevokeSigner());
   const tx = await c.revokeCertificate(certId);
   const receipt = await tx.wait();
   return receipt.hash;

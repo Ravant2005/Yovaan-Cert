@@ -21,6 +21,7 @@ import { protect } from "../middleware/auth.js";
 import { extractCertificateText, sendToOllama } from "../services/ai.js";
 import Certificate from "../models/Certificate.js";
 import {
+  issueCertificateOnChain,
   revokeCertificateOnChain,
   checkCertificateOnChain,
   getCertificateFromChain,
@@ -87,8 +88,9 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
   fileFilter: (_, file, cb) => {
-    if (file.mimetype !== "application/pdf")
-      return cb(new Error("Only PDF files are allowed"), false);
+    const allowed = ["application/pdf", "image/png", "image/jpeg", "image/jpg"];
+    if (!allowed.includes(file.mimetype))
+      return cb(new Error("Only PDF, PNG, and JPEG files are allowed"), false);
     cb(null, true);
   },
 });
@@ -232,6 +234,107 @@ router.post("/issue/confirm", protect, async (req, res) => {
   } catch (err) {
     console.error("[Confirm Error]", err);
     res.status(500).json({ error: err.message || "Certificate confirmation failed" });
+  }
+});
+
+// ── ISSUE (Combined — server-side blockchain signing) ────
+// Single endpoint: validates → IPFS upload → blockchain TX → MongoDB save.
+// No MetaMask required — uses ISSUER_PRIVATE_KEY from .env.
+
+router.post("/issue", protect, upload.single("certificate"), async (req, res) => {
+  try {
+    // 0. Validate metadata
+    const { error: validationError, value: validated } = issuanceSchema.validate(req.body);
+    if (validationError) {
+      return res.status(400).json({
+        error: "Validation failed",
+        details: validationError.details.map((d) => d.message).join("; "),
+      });
+    }
+
+    if (!req.file) return res.status(400).json({ error: "No certificate file uploaded" });
+
+    const studentCheck = validateStudentAddress(validated.studentAddress);
+    if (!studentCheck.ok) return res.status(400).json({ error: studentCheck.message });
+    const normalizedStudentAddress = studentCheck.address;
+
+    // 1. SHA-256 hash
+    const hash = crypto
+      .createHash("sha256")
+      .update(req.file.buffer)
+      .digest("hex");
+
+    // 2. Duplicate check
+    const duplicate = await Certificate.findOne({ hash });
+    if (duplicate) {
+      return res.status(409).json({
+        error: "This exact certificate has already been issued",
+        existingCertId: duplicate.certId,
+      });
+    }
+
+    // 3. Upload to IPFS
+    console.log("⬆️  Uploading to IPFS...");
+    const cid = await uploadToIPFS(req.file.buffer, req.file.originalname);
+    console.log("✅ IPFS CID:", cid);
+
+    // 4. Generate cert ID
+    const certId = `YOVAAN-${uuidv4().toUpperCase().slice(0, 8)}`;
+
+    // 5. Build metadata JSON
+    const metadata = JSON.stringify({
+      studentName: validated.studentName,
+      courseName: validated.courseName,
+      grade: validated.grade,
+      issueDate: validated.issueDate,
+      organizationName: validated.organizationName,
+    });
+
+    // 6. Sign & submit blockchain transaction (server-side)
+    const txHash = await issueCertificateOnChain(
+      certId, hash, cid, normalizedStudentAddress, metadata
+    );
+
+    // 7. Generate QR code
+    const verifyUrl = `${process.env.VERIFY_BASE_URL || "http://localhost:3000/verify"}?certId=${certId}`;
+    const qrCodeData = await QRCode.toDataURL(verifyUrl);
+
+    // 8. Save to MongoDB
+    const cert = await Certificate.create({
+      certId,
+      hash,
+      cid,
+      issuerAddress: "server-signed",
+      studentAddress: normalizedStudentAddress.toLowerCase(),
+      txHash,
+      qrCodeData,
+      verifyUrl,
+      studentName: validated.studentName,
+      courseName: validated.courseName,
+      grade: validated.grade,
+      issueDate: validated.issueDate,
+      organizationName: validated.organizationName,
+    });
+
+    console.log(`✅ Certificate ${certId} issued and saved.`);
+
+    res.status(201).json({
+      success: true,
+      certId: cert.certId,
+      txHash: cert.txHash,
+      cid: cert.cid,
+      ipfsUrl: buildOriginalFileUrl(req, certId),
+      verifyUrl: cert.verifyUrl,
+      qrCode: cert.qrCodeData,
+    });
+  } catch (err) {
+    console.error("[Issue Error]", err);
+    const status = err.status && Number.isInteger(err.status) ? err.status : 500;
+    res.status(status).json({
+      error: err.message || "Certificate issuance failed",
+      code: err.code,
+      details: err.details,
+    });
   }
 });
 
