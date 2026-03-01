@@ -7,7 +7,7 @@ const api = axios.create({
 
 // Attach JWT token on every request
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
+  const token = sessionStorage.getItem("token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -17,7 +17,7 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem("token");
+      sessionStorage.removeItem("token");
       window.location.href = "/login";
     }
     return Promise.reject(err);
@@ -47,6 +47,16 @@ export const prepareIssuance = (formData) =>
  */
 export const confirmIssuance = (data) =>
   api.post("/certificates/issue/confirm", data);
+
+/**
+ * Combined issue: upload file + sign blockchain TX on backend + save to DB.
+ * No MetaMask required.
+ */
+export const issueCertificate = (formData) =>
+  api.post("/certificates/issue", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120000, // blockchain TX can take time
+  });
 
 /**
  * AI Auto-Extract: Upload PDF/image → OCR + Ollama → structured metadata.

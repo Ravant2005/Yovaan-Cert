@@ -16,8 +16,8 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const res = await login(email, password);
-      localStorage.setItem("token", res.data.token);
-      localStorage.setItem("user", JSON.stringify(res.data.user));
+      sessionStorage.setItem("token", res.data.token);
+      sessionStorage.setItem("user", JSON.stringify(res.data.user));
       navigate("/");
     } catch (err) {
       setError(err.response?.data?.error || "Login failed");

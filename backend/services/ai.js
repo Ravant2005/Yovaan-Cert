@@ -160,12 +160,12 @@ Rules:
    - NEVER use the current date unless no date exists in the text.
    - If no issue date exists in the text, output an empty string "".
 2. Organization Name: Find the issuing organization or company name. This is usually the largest text at the top, or associated with the CEO/Director signature at the bottom. Do not confuse the student's name or course name with the organization.
-3. JSON Schema: Force exactly this structure: { "studentName": "", "courseName": "", "grade": "", "issueDate": "", "organizationName": "" }.
+3. JSON Schema: Force exactly this structure: { "studentName": "", "courseName": "", "grade": "A", "issueDate": "", "organizationName": "" }.
 4. If a field is not found in the text, set its value to an empty string "".
 5. Do NOT include any conversational text, explanation, or filler. Return ONLY the JSON object.
 
 Raw text:
-"""
+""" 
 ${rawText.slice(0, 4000)}
 """`;
 
@@ -213,6 +213,9 @@ ${rawText.slice(0, 4000)}
     for (const key of allowed) {
         cleaned[key] = typeof parsed[key] === "string" ? parsed[key].trim() : "";
     }
+
+    // Always force grade to "A" regardless of AI output
+    cleaned.grade = "A";
 
     return cleaned;
 }
