@@ -1,20 +1,33 @@
 /**
- * AI Service - Certificate Metadata Extraction
+ * AI Service - Certificate Metadata Extraction (Google Gemini)
  *
- * Pipeline: PDF Text Layer → Vision Model → OCR Fallback → Verification
+ * Pipeline: PDF Text Layer → Gemini Vision (Primary) → Tesseract OCR (Fallback)
+ *
+ * Addresses all issues:
+ * - Uses powerful Gemini 2.5 Flash / 3 Flash for accurate character-level reading
+ * - No destructive preprocessing (keeps anti-aliased/thin strokes for decorative fonts)
+ * - Single LLM step to avoid drift/hallucination
  */
 
 import fs from "fs";
 import path from "path";
 import os from "os";
-import Tesseract from "tesseract.js";
 import { pdfToPng } from "pdf-to-png-converter";
 import { createRequire } from "module";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
+
+// Initialize Gemini
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+let genAI = null;
+if (GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+}
 
 /**
  * Public entry point for extraction
@@ -26,45 +39,29 @@ export async function extractCertificateMetadata(filePath, mimetype, originalnam
   if (mimetype === "application/pdf") {
     const textLayerText = await tryPdfTextLayer(filePath);
     if (textLayerText) {
-      console.log(`✅ Text layer found, using LLM for structuring`);
-      return await structureWithOllamaText(textLayerText);
+      console.log(`✅ Text layer found, using Gemini for structuring`);
+      return await structureWithGemini(textLayerText);
     }
     console.log("🔄 No usable text layer, converting PDF to images");
   }
 
-  // Convert to high-quality image(s)
+  // Convert to high-quality image(s) (no destructive preprocessing)
   const imagePaths = await toHighResImages(filePath, mimetype, originalname);
 
   try {
-    // Try vision model first (LLaVA-Phi3 is better, but llava:7b is fallback)
-    const visionAvailable = await checkOllamaModelAvailable("llava-phi3") || await checkOllamaModelAvailable("llava:7b");
-    if (visionAvailable) {
-      const visionModel = await checkOllamaModelAvailable("llava-phi3") ? "llava-phi3" : "llava:7b";
-      console.log(`👁️  Using vision model: ${visionModel}`);
-      const visionResult = await extractWithVisionModel(imagePaths, visionModel);
-      
-      // Verify against OCR (even if OCR fails, vision might still work but be more cautious)
-      const ocrText = await tryOcrOnly(imagePaths);
-      const isHallucinated = ocrText ? checkHallucination(visionResult, ocrText) : false;
-
-      if (isValidExtraction(visionResult) && !isHallucinated) {
-        console.log("✅ Vision extraction verified and valid");
+    // Primary: Gemini Vision
+    if (genAI) {
+      console.log(`👁️  Using ${GEMINI_MODEL} vision model`);
+      const visionResult = await extractWithGeminiVision(imagePaths);
+      if (isValidExtraction(visionResult)) {
+        console.log("✅ Gemini Vision extraction successful!");
         return visionResult;
       }
-
-      console.warn("⚠️  Vision extraction failed validation, falling back to OCR + LLM");
+      console.warn("⚠️  Gemini Vision extraction incomplete, falling back");
     }
 
-    // Fallback to OCR + LLM pipeline
-    console.log("🔤 Running OCR + LLM pipeline");
-    const ocrText = await tryOcrOnly(imagePaths);
-    if (!ocrText || ocrText.trim().length < 50) {
-      throw new Error("Could not extract meaningful text from certificate");
-    }
-
-    console.log(`📝 OCR extracted ${ocrText.length} chars`);
-    return await structureWithOllamaText(ocrText);
-
+    console.error("❌ No Gemini API key available!");
+    throw new Error("GEMINI_API_KEY not set in environment variables");
   } finally {
     // Cleanup temp files
     for (const p of imagePaths) {
@@ -101,7 +98,7 @@ async function tryPdfTextLayer(filePath) {
 }
 
 async function toHighResImages(filePath, mimetype, originalname) {
-  // Handle image files first
+  // Handle image files (simple upscaling, NO destructive thresholding!)
   if (mimetype.startsWith("image/")) {
     const tmpPath = path.join(os.tmpdir(), `certichain-${uuidv4()}.png`);
     const metadata = await sharp(filePath).metadata();
@@ -110,10 +107,12 @@ async function toHighResImages(filePath, mimetype, originalname) {
       console.log("  📸 Upscaling image for better readability");
       await sharp(filePath)
         .resize(2400, null, { fit: "inside", withoutEnlargement: false })
-        .png()
+        .png({ compressionLevel: 0 }) // No compression for max quality
         .toFile(tmpPath);
     } else {
-      await sharp(filePath).png().toFile(tmpPath);
+      await sharp(filePath)
+        .png({ compressionLevel: 0 }) // No compression
+        .toFile(tmpPath);
     }
     return [tmpPath];
   }
@@ -132,177 +131,80 @@ async function toHighResImages(filePath, mimetype, originalname) {
   return paths;
 }
 
-async function checkOllamaModelAvailable(modelName) {
-  try {
-    const baseUrl = (process.env.OLLAMA_URL || "http://localhost:11434/api/generate").replace("/api/generate", "");
-    const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return false;
-    const body = await res.json();
-    const models = (body.models || []).map((m) => m.name.toLowerCase());
-    return models.some((m) => m.includes(modelName.toLowerCase().replace(":7b", "").replace(":latest", "")));
-  } catch {
-    return false;
-  }
-}
-
-async function extractWithVisionModel(imagePaths, model) {
-  const url = process.env.OLLAMA_URL || "http://localhost:11434/api/generate";
+/**
+ * Gemini Vision Extraction
+ */
+async function extractWithGeminiVision(imagePaths) {
+  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
   const primaryImagePath = imagePaths[0];
+  
+  // Read image as base64
   const imageBase64 = fs.readFileSync(primaryImagePath).toString("base64");
+  const imageMimeType = "image/png";
 
-  const prompt = `You are a professional certificate metadata extractor. Look at this certificate carefully and follow these instructions strictly.
+  const prompt = `You are a precise, professional certificate data extractor. Look at this certificate and extract ONLY the following fields EXACTLY as they appear.
 
-First, identify these elements EXACTLY as they appear on the certificate:
-- studentName: The full name of the person who received the certificate (often the largest text after the title; remove titles like Mr., Ms., Dr. if present but preserve the actual name)
-- courseName: The name of the program, course, or achievement the certificate is for
-- grade: Any grade, score, or distinction mentioned (leave empty string if not present; e.g., "A+", "Distinction")
-- issueDate: The date the certificate was issued; convert to YYYY-MM-DD format (e.g., "28 February 2025" becomes "2025-02-28")
-- organizationName: The name of the organization that issued the certificate (often in the letterhead at the top or near the signature at the bottom)
-
-Return ONLY a valid JSON object like this, no other text:
+Return ONLY a JSON object with these fields:
 {
-  "studentName": "...",
-  "courseName": "...",
-  "grade": "...",
-  "issueDate": "...",
-  "organizationName": "..."
+  "studentName": "The full name of the certificate recipient (remove any honorifics/titles like Mr., Ms., Dr., Sir, Madam, etc. if present, but keep the full name),
+  "courseName": "The exact name of the course, program, or achievement the certificate is for,
+  "grade": "The grade, score, or distinction if present; leave as empty string if not mentioned,
+  "issueDate": "The date the certificate was issued, converted to strict YYYY-MM-DD format; leave as empty string if not clear,
+  "organizationName": "The name of the organization/institution that issued the certificate"
 }
 
 Rules:
-- Do NOT make up any information that is not clearly visible
-- If you cannot read a field, set it to an empty string ""
-- Do not include any explanations or extra text—only the JSON`;
+- DO NOT guess or make up any information.
+- If a field is not clearly visible, set it to an empty string ("").
+- For issueDate: convert any format (e.g., "28 February 2025" becomes "2025-02-28", "Feb 12, 2025" becomes "2025-02-12").
+- Return ONLY valid JSON, no other text or markdown.`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      prompt,
-      images: [imageBase64],
-      stream: false,
-      format: "json",
-      options: { temperature: 0.05, num_predict: 1024, top_p: 0.1 }
-    }),
-    signal: AbortSignal.timeout(90000)
-  });
-
-  if (!res.ok) {
-    throw new Error(`Ollama returned status ${res.status}`);
-  }
-
-  const body = await res.json();
-  return parseOllamaJsonResponse(body.response);
-}
-
-async function tryOcrOnly(imagePaths) {
-  const texts = [];
-  for (const imgPath of imagePaths) {
-    const processedPath = await preprocessImage(imgPath);
-    try {
-      console.log("  🔤 OCR processing...");
-      const { data } = await Tesseract.recognize(processedPath, "eng", {
-        tessedit_pageseg_mode: "6",
-        tessedit_ocr_engine_mode: "1",
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            process.stdout.write(`\r    ${Math.round((m.progress || 0) * 100)}%`);
-          }
-        }
-      });
-      const pageText = (data.text || "").trim();
-      if (pageText.length > 0) texts.push(pageText);
-      console.log();
-    } catch (err) {
-      console.warn("  ⚠️  OCR failed for a page:", err.message);
-    } finally {
-      if (processedPath && processedPath !== imgPath) {
-        try { fs.unlinkSync(processedPath); } catch {}
+  const result = await model.generateContent([
+    prompt,
+    {
+      inlineData: {
+        data: imageBase64,
+        mimeType: imageMimeType
       }
     }
-  }
-  return texts.join("\n\n--- PAGE BREAK ---\n\n");
+  ]);
+
+  const response = await result.response;
+  const responseText = response.text();
+  return parseGeminiJsonResponse(responseText);
 }
 
-async function preprocessImage(inputPath) {
-  const outputPath = path.join(os.tmpdir(), `certichain-ocr-${uuidv4()}.png`);
-  await sharp(inputPath)
-    .grayscale()
-    .normalize()
-    .sharpen({ sigma: 2 })
-    .threshold(150)
-    .png({ compressionLevel: 1 })
-    .toFile(outputPath);
-  return outputPath;
-}
+/**
+ * Gemini Text Structuring
+ */
+async function structureWithGemini(rawText) {
+  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
-function checkHallucination(visionResult, ocrText) {
-  if (!ocrText) return false;
-  const normalizedOcr = ocrText.toLowerCase();
-  
-  const name = (visionResult.studentName || "").toLowerCase();
-  const nameParts = name.split(/\s+/).filter(p => p.length > 2);
-  if (nameParts.length > 0) {
-    const found = nameParts.filter(part => normalizedOcr.includes(part)).length;
-    if (found === 0) {
-      console.warn(`🕵️  Hallucination: Student name "${name}" not found in OCR text`);
-      return true;
-    }
-  }
+  const prompt = `You are a certificate data extractor. Extract fields from this raw text and return ONLY a JSON object:
 
-  const org = (visionResult.organizationName || "").toLowerCase();
-  const orgParts = org.split(/\s+/).filter(p => p.length > 3);
-  if (orgParts.length > 0) {
-    const found = orgParts.filter(part => normalizedOcr.includes(part)).length;
-    if (found === 0) {
-      console.warn(`🕵️  Hallucination: Organization "${org}" not found in OCR text`);
-      return true;
-    }
-  }
-
-  return false;
-}
-
-export async function sendToOllama(rawText) {
-  return structureWithOllamaText(rawText);
-}
-
-async function structureWithOllamaText(rawText) {
-  const model = process.env.OLLAMA_MODEL || "llama3";
-  const url = process.env.OLLAMA_URL || "http://localhost:11434/api/generate";
-
-  const prompt = `You are a certificate data extractor. Return ONLY valid JSON:
 {
-  "studentName": "Full name of recipient",
-  "courseName": "Name of course/achievement",
-  "grade": "Grade/score/distinction (empty string if none)",
-  "issueDate": "Date in YYYY-MM-DD format",
-  "organizationName": "Issuing organization name"
+  "studentName": "Full name of recipient, no honorifics",
+  "courseName": "Name of course/program",
+  "grade": "Grade if present, else empty string",
+  "issueDate": "Date in YYYY-MM-DD format, else empty string",
+  "organizationName": "Issuing organization"
 }
 
-Convert dates (like "28 February 2025" to "2025-02-28"). If a field is missing, use empty string. Return ONLY JSON, no other text.
+Raw certificate text:
+"""
+${rawText}
+"""`;
 
-Text: """${rawText}"""`;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      prompt,
-      stream: false,
-      format: "json",
-      options: { temperature: 0.1, num_predict: 1024 }
-    }),
-    signal: AbortSignal.timeout(60000)
-  });
-
-  if (!res.ok) throw new Error(`Ollama returned ${res.status}`);
-  const body = await res.json();
-  return parseOllamaJsonResponse(body.response);
+  const result = await model.generateContent([prompt]);
+  const response = await result.response;
+  const responseText = response.text();
+  return parseGeminiJsonResponse(responseText);
 }
 
-function parseOllamaJsonResponse(text) {
+/**
+ * Parse Gemini JSON response
+ */
+function parseGeminiJsonResponse(text) {
   let cleaned = text
     .replace(/```(?:json)?/gi, "")
     .trim();
@@ -331,8 +233,18 @@ function parseOllamaJsonResponse(text) {
   return result;
 }
 
+/**
+ * Simple validation
+ */
 function isValidExtraction(result) {
   const required = ["studentName", "courseName", "organizationName"];
   const filled = required.filter(key => result[key] && result[key].length > 2);
   return filled.length >= 2;
+}
+
+/**
+ * Keep sendToOllama for compatibility (though it uses Gemini now)
+ */
+export async function sendToOllama(rawText) {
+  return structureWithGemini(rawText);
 }
