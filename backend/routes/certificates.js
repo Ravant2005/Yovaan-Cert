@@ -18,7 +18,7 @@ import Joi from "joi";
 import { v4 as uuidv4 } from "uuid";
 import { ethers } from "ethers";
 import { protect } from "../middleware/auth.js";
-import { extractCertificateText, sendToOllama } from "../services/ai.js";
+import { extractCertificateMetadata, sendToOllama } from "../services/ai.js";
 import Certificate from "../models/Certificate.js";
 import {
   issueCertificateOnChain,
@@ -400,43 +400,30 @@ router.post("/auto-extract", protect, autoExtractUpload.single("certificate"), a
     fs.writeFileSync(tempFilePath, req.file.buffer);
     console.log(`📁 Saved temporary file to: ${tempFilePath}`);
 
-    // 1. Extract text (pdf-parse → Tesseract OCR fallback)
-    let rawText;
-    try {
-      rawText = await extractCertificateText(tempFilePath, req.file.mimetype, safeName);
-    } catch (extractErr) {
-      console.error("[Text Extraction Error]", extractErr.message);
-      return res.json({
-        success: false,
-        data: null,
-        error: `Text extraction failed: ${extractErr.message}`,
-      });
-    }
-
-    if (!rawText || rawText.trim().length < 10) {
-      return res.json({
-        success: false,
-        data: null,
-        error: "Could not extract meaningful text from this document.",
-      });
-    }
-
-    console.log(`📝 Extracted ${rawText.length} chars — sending to Ollama...`);
-
-    // 2. Send to Ollama for structured JSON extraction
+    // NEW CODE — single-call extraction
     let extractedData;
     try {
-      extractedData = await sendToOllama(rawText);
-    } catch (ollamaErr) {
-      console.error("[Ollama Error]", ollamaErr.message);
+      // extractCertificateMetadata handles the full pipeline:
+      // pdf-parse → LLaVA vision → Enhanced Tesseract → Ollama structuring
+      extractedData = await extractCertificateMetadata(tempFilePath, req.file.mimetype, safeName);
+    } catch (extractErr) {
+      console.error("[Extraction Error]", extractErr.message);
       return res.json({
         success: false,
         data: null,
-        error: `AI extraction failed: ${ollamaErr.message}. You can fill the form manually.`,
+        error: `Extraction failed: ${extractErr.message}. You can fill the form manually.`,
       });
     }
 
-    console.log("✅ Ollama returned:", extractedData);
+    if (!extractedData || !isValidExtraction(extractedData)) {
+      return res.json({
+        success: false,
+        data: extractedData || null,
+        error: "Could not extract enough fields from this certificate. Please fill the form manually.",
+      });
+    }
+
+    console.log("✅ Extraction complete:", extractedData);
     res.json({ success: true, data: extractedData });
   } catch (err) {
     console.error("[Auto-Extract Error]", err);
@@ -459,6 +446,11 @@ router.post("/auto-extract", protect, autoExtractUpload.single("certificate"), a
 });
 
 // ── SINGLE CERT ──────────────────────────────────────────
+
+function isValidExtraction(result) {
+  const keyFields = ["studentName", "courseName", "issueDate", "organizationName"];
+  return keyFields.filter((k) => result[k]?.length > 0).length >= 3;
+}
 
 router.get("/:certId/original-file", async (req, res) => {
   try {
