@@ -150,20 +150,28 @@ async function extractWithVisionModel(imagePaths, model) {
   const primaryImagePath = imagePaths[0];
   const imageBase64 = fs.readFileSync(primaryImagePath).toString("base64");
 
-  const prompt = `You are an expert certificate data extractor. Look at this certificate and return ONLY a valid JSON object with these fields:
+  const prompt = `You are a professional certificate metadata extractor. Look at this certificate carefully and follow these instructions strictly.
+
+First, identify these elements EXACTLY as they appear on the certificate:
+- studentName: The full name of the person who received the certificate (often the largest text after the title; remove titles like Mr., Ms., Dr. if present but preserve the actual name)
+- courseName: The name of the program, course, or achievement the certificate is for
+- grade: Any grade, score, or distinction mentioned (leave empty string if not present; e.g., "A+", "Distinction")
+- issueDate: The date the certificate was issued; convert to YYYY-MM-DD format (e.g., "28 February 2025" becomes "2025-02-28")
+- organizationName: The name of the organization that issued the certificate (often in the letterhead at the top or near the signature at the bottom)
+
+Return ONLY a valid JSON object like this, no other text:
 {
-  "studentName": "The exact full name of the person receiving the certificate (remove titles like Mr./Ms. if present but preserve actual name)",
-  "courseName": "The exact name of the course/program/achievement",
-  "grade": "The grade, score, or distinction (leave empty string if not present)",
-  "issueDate": "The date of issuance, formatted strictly as YYYY-MM-DD",
-  "organizationName": "The exact name of the organization/issuing body"
+  "studentName": "...",
+  "courseName": "...",
+  "grade": "...",
+  "issueDate": "...",
+  "organizationName": "..."
 }
 
 Rules:
-- Do NOT guess or make up any information
-- If a field is not clearly visible, leave it as an empty string
-- For issueDate: convert any date format (e.g., "28 February 2025" → "2025-02-28")
-- Return ONLY the JSON, no other text`;
+- Do NOT make up any information that is not clearly visible
+- If you cannot read a field, set it to an empty string ""
+- Do not include any explanations or extra text—only the JSON`;
 
   const res = await fetch(url, {
     method: "POST",
